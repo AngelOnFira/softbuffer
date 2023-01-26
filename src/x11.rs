@@ -266,7 +266,7 @@ impl X11Impl {
     }
 
     /// Get a mutable reference to the buffer.
-    pub(crate) fn buffer_mut(&mut self) -> Result<&mut [u32], SoftBufferError> {
+    pub(crate) fn buffer_mut(&mut self) -> Result<BufferImpl, SoftBufferError> {
         log::trace!("buffer_mut: window={:X}", self.window);
 
         let buffer = self
@@ -280,30 +280,47 @@ impl X11Impl {
             })?;
 
         // Crop it down to the window size.
-        Ok(&mut buffer[..total_len(self.width, self.height) / 4])
+        // Ok(&mut buffer[..total_len(self.width, self.height) / 4])
+
+        Ok(BufferImpl { imp: self })
+    }
+}
+
+pub struct BufferImpl<'a> {
+    imp: &'a mut X11Impl,
+}
+
+impl<'a> BufferImpl<'a> {
+    pub fn pixels(&self) -> &[u32] {
+        todo!() // XXX
+    }
+
+    pub fn pixels_mut(&mut self) -> &mut [u32] {
+        todo!() // XXX
     }
 
     /// Push the buffer to the window.
-    pub(crate) fn present(&mut self) -> Result<(), SoftBufferError> {
-        log::trace!("present: window={:X}", self.window);
+    pub fn present(self) -> Result<(), SoftBufferError> {
+        log::trace!("present: window={:X}", self.imp.window);
 
-        let result = match self.buffer {
+        let result = match self.imp.buffer {
             Buffer::Wire(ref wire) => {
                 // This is a suboptimal strategy, raise a stink in the debug logs.
                 log::debug!("Falling back to non-SHM method for window drawing.");
 
-                self.display
+                self.imp
+                    .display
                     .connection
                     .put_image(
                         xproto::ImageFormat::Z_PIXMAP,
-                        self.window,
-                        self.gc,
-                        self.width,
-                        self.height,
+                        self.imp.window,
+                        self.imp.gc,
+                        self.imp.width,
+                        self.imp.height,
                         0,
                         0,
                         0,
-                        self.depth,
+                        self.imp.depth,
                         bytemuck::cast_slice(wire),
                     )
                     .map(|c| c.ignore_error())
@@ -312,24 +329,25 @@ impl X11Impl {
 
             Buffer::Shm(ref mut shm) => {
                 // If the X server is still processing the last image, wait for it to finish.
-                shm.finish_wait(&self.display.connection)
+                shm.finish_wait(&self.imp.display.connection)
                     .and_then(|()| {
                         // Put the image into the window.
                         if let Some((_, segment_id)) = shm.seg {
-                            self.display
+                            self.imp
+                                .display
                                 .connection
                                 .shm_put_image(
-                                    self.window,
-                                    self.gc,
-                                    self.width,
-                                    self.height,
+                                    self.imp.window,
+                                    self.imp.gc,
+                                    self.imp.width,
+                                    self.imp.height,
                                     0,
                                     0,
-                                    self.width,
-                                    self.height,
+                                    self.imp.width,
+                                    self.imp.height,
                                     0,
                                     0,
-                                    self.depth,
+                                    self.imp.depth,
                                     xproto::ImageFormat::Z_PIXMAP.into(),
                                     false,
                                     segment_id,
@@ -343,7 +361,7 @@ impl X11Impl {
                     })
                     .and_then(|()| {
                         // Send a short request to act as a notification for when the X server is done processing the image.
-                        shm.begin_wait(&self.display.connection)
+                        shm.begin_wait(&self.imp.display.connection)
                     })
             }
         };
